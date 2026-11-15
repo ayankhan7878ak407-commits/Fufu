@@ -1,0 +1,125 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src * data:; frame-src *">
+<title>FUFU</title>
+<style>
+:root{--bg:#f4f4fb;--fg:#17172b;--glass:rgba(255,255,255,.7);--line:rgba(0,0,0,.1);--ac:#7c5cff}
+body.dark{--bg:#12122a;--fg:#eeeefa;--glass:rgba(40,40,80,.6);--line:rgba(255,255,255,.12)}
+*{box-sizing:border-box}html,body{margin:0;height:100%;font:14px system-ui,sans-serif;background:var(--bg);color:var(--fg)}
+body{display:flex;flex-direction:column}
+button,input{font:inherit;color:inherit}button{background:none;border:0;border-radius:8px;padding:6px 9px;cursor:pointer}button:hover{background:var(--line)}
+#tabs{display:flex;gap:4px;padding:6px 6px 0;overflow-x:auto;background:var(--glass);backdrop-filter:blur(14px)}
+.tab{display:flex;align-items:center;gap:6px;min-width:110px;max-width:200px;padding:6px 8px;border-radius:10px 10px 0 0;cursor:pointer;white-space:nowrap}
+.tab.on{background:var(--bg);box-shadow:inset 0 2px var(--ac)}.tab span{overflow:hidden;text-overflow:ellipsis;flex:1}
+.tab img{width:14px;height:14px}.tab.load img{animation:sp 1s linear infinite;opacity:.5}@keyframes sp{to{transform:rotate(360deg)}}
+.priv{color:#f5a}
+#bar{display:flex;gap:4px;padding:6px;align-items:center;background:var(--bg);border-bottom:1px solid var(--line)}
+#url{flex:1;min-width:60px;padding:8px 14px;border-radius:20px;border:1px solid var(--line);background:var(--glass);outline:0}
+#url:focus{border-color:var(--ac)}
+#main{flex:1;position:relative;overflow:hidden}
+webview{position:absolute;inset:0;width:100%;height:100%;display:none}webview.on{display:flex}
+#home{position:absolute;inset:0;z-index:2;display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:20px;overflow:auto;text-align:center;background:radial-gradient(circle at 30% 20%,color-mix(in srgb,var(--ac) 35%,transparent),transparent 55%),var(--bg)}
+#home.on{display:flex}
+.logo{font-size:clamp(48px,12vw,96px);font-weight:900;letter-spacing:.08em;background:linear-gradient(135deg,var(--ac),#ff6ec7);-webkit-background-clip:text;color:transparent}
+#clock{font-size:28px;font-weight:300}#hs{width:min(560px,100%);padding:14px 22px;border-radius:30px;border:1px solid var(--line);background:var(--glass);backdrop-filter:blur(14px);outline:0;font-size:16px}
+#tiles{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;max-width:620px}
+.tile{width:92px;padding:10px;border-radius:14px;background:var(--glass);border:1px solid var(--line);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#drawer{position:absolute;top:0;right:0;bottom:0;width:min(380px,100%);z-index:5;background:var(--bg);border-left:1px solid var(--line);display:none;flex-direction:column;padding:10px;gap:8px;overflow:auto;box-shadow:-8px 0 30px rgba(0,0,0,.2)}
+#drawer.on{display:flex}.row{display:flex;gap:6px;align-items:center;padding:6px;border-radius:8px}.row:hover{background:var(--line)}.row a{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+progress{width:70px}input[type=text],input[type=search]{padding:7px 10px;border-radius:8px;border:1px solid var(--line);background:var(--glass)}
+#err{position:absolute;inset:0;z-index:3;display:none;align-items:center;justify-content:center;flex-direction:column;background:var(--bg);gap:10px}#err.on{display:flex}
+</style></head><body>
+<div id="tabs"></div>
+<div id="bar">
+ <button id="bk" title="Back">◀</button><button id="fw" title="Forward">▶</button><button id="rl" title="Reload / Stop">⟳</button><button id="hm" title="Home">⌂</button>
+ <input id="url" placeholder="Search Google or enter address" autocomplete="off" spellcheck="false">
+ <button id="star" title="Bookmark">☆</button><button id="dk" title="Downloads">⬇</button><button id="bm" title="Bookmarks">★</button><button id="hi" title="History">🕘</button><button id="st" title="Settings">⚙</button>
+</div>
+<div id="main"><div id="home"></div><div id="err"><h2 id="errt">Can't reach this page</h2><div id="errm"></div><button id="retry">Retry</button></div><div id="drawer"></div></div>
+<script>
+const $=s=>document.querySelector(s),LS=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))??d}catch{return d}},save=(k,v)=>localStorage.setItem(k,JSON.stringify(v));
+let tabs=[],cur=null,closed=[],uid=0,priv=false;
+let bms=LS('bm',[]),hist=LS('hist',[]),dls=[],cfg=LS('cfg',{dark:true,ac:'#7c5cff',tiles:['https://wikipedia.org','https://github.com','https://news.ycombinator.com']});
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function theme(){document.body.classList.toggle('dark',cfg.dark);document.documentElement.style.setProperty('--ac',cfg.ac);save('cfg',cfg)}
+function norm(t){t=t.trim();if(!t)return'';if(/^(https?|file|about):/i.test(t))return t;
+ if(!/\s/.test(t)&&(/^localhost(:\d+)?(\/|$)/.test(t)||/^([\w-]+\.)+[a-z]{2,}(:\d+)?(\/|$)/i.test(t)))return'https://'+t;
+ return'https://www.google.com/search?q='+encodeURIComponent(t)}
+function newTab(u='',p=priv){
+ const id=++uid,wv=document.createElement('webview');
+ const part=p?'fufu-private-'+(window.__ps??=Date.now()):'persist:fufu';
+ if(p)fufu.hook(part);
+ wv.setAttribute('partition',part);wv.setAttribute('allowpopups','');
+ $('#main').prepend(wv);
+ const t={id,wv,title:'New Tab',url:'',fav:'',priv:p,loading:false};tabs.push(t);
+ const ev=(n,f)=>wv.addEventListener(n,f);
+ ev('did-start-loading',()=>{t.loading=true;$('#err').classList.remove('on');draw()});
+ ev('did-stop-loading',()=>{t.loading=false;draw()});
+ ev('page-title-updated',e=>{t.title=e.title;draw()});
+ ev('page-favicon-updated',e=>{t.fav=e.favicons[0]||'';draw()});
+ const nav=e=>{if(e.isMainFrame===false)return;t.url=e.url;if(!t.priv&&/^https?:/.test(e.url)){hist.unshift({url:e.url,title:t.title,t:Date.now()});hist=hist.slice(0,1000);save('hist',hist)}draw()};
+ ev('did-navigate',nav);ev('did-navigate-in-page',nav);
+ ev('did-fail-load',e=>{if(e.errorCode===-3||!e.isMainFrame)return;$('#errm').textContent=e.errorDescription+' ('+e.validatedURL+')';$('#err').classList.add('on')});
+ if(u)wv.src=norm(u);
+ sel(id);return t}
+function sel(id){cur=tabs.find(t=>t.id===id);tabs.forEach(t=>t.wv.classList.toggle('on',t===cur));$('#err').classList.remove('on');draw()}
+function closeTab(id){const i=tabs.findIndex(t=>t.id===id);if(i<0)return;const t=tabs[i];if(!t.priv&&t.url)closed.push(t.url);t.wv.remove();tabs.splice(i,1);
+ if(!tabs.length){newTab();return}if(cur===t)sel(tabs[Math.min(i,tabs.length-1)].id);else draw()}
+function draw(){
+ $('#tabs').innerHTML='';
+ tabs.forEach(t=>{const d=document.createElement('div');d.className='tab'+(t===cur?' on':'')+(t.loading?' load':'');d.draggable=true;
+  d.innerHTML=`<img src="${esc(t.fav||'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==')}"><span class="${t.priv?'priv':''}">${esc(t.title)}</span><button>✕</button><button data-d title="Duplicate">⧉</button>`;
+  d.onclick=()=>sel(t.id);d.querySelector('button').onclick=e=>{e.stopPropagation();closeTab(t.id)};
+  d.querySelector('[data-d]').onclick=e=>{e.stopPropagation();newTab(t.url,t.priv)};
+  d.ondragstart=e=>e.dataTransfer.setData('t',t.id);d.ondragover=e=>e.preventDefault();
+  d.ondrop=e=>{const f=tabs.findIndex(x=>x.id==e.dataTransfer.getData('t')),to=tabs.indexOf(t);if(f<0)return;tabs.splice(to,0,tabs.splice(f,1)[0]);draw()};
+  $('#tabs').append(d)});
+ const plus=document.createElement('button');plus.textContent='＋';plus.onclick=()=>newTab();$('#tabs').append(plus);
+ const pb=document.createElement('button');pb.textContent=priv?'🕶 Private ON':'🕶';pb.title='Next new tabs: private browsing';pb.onclick=()=>{priv=!priv;if(priv&&!tabs.some(t=>t.priv))newTab('',true);draw()};$('#tabs').append(pb);
+ if(!cur)return;
+ const home=!cur.url||cur.url==='about:blank';$('#home').classList.toggle('on',home);
+ if(document.activeElement!==$('#url'))$('#url').value=home?'':cur.url;
+ $('#star').textContent=bms.some(b=>b.url===cur.url)?'★':'☆';$('#rl').textContent=cur.loading?'✕':'⟳';
+ document.title=cur.title+' — FUFU'}
+function go(t){const u=norm(t);if(!u)return;cur.url=u;cur.wv.src=u;draw()}
+function homeUI(){
+ const h=new Date().getHours(),g=h<5?'Good night':h<12?'Good morning':h<18?'Good afternoon':'Good evening';
+ $('#home').innerHTML=`<div class="logo">FUFU</div><div>${g} 👋 — Your World. One Click Away.</div><div id="clock"></div><input id="hs" placeholder="Search Google or type a URL" autofocus><div id="tiles"></div><small>Frequent</small><div id="fr" class="tile" style="display:none"></div>`;
+ const freq=Object.entries(hist.reduce((a,x)=>{const o=new URL(x.url).origin;a[o]=(a[o]||0)+1;return a},{})).sort((a,b)=>b[1]-a[1]).slice(0,5).map(x=>x[0]);
+ const all=[...new Set([...cfg.tiles,...freq])];
+ all.forEach(u=>{const b=document.createElement('button');b.className='tile';b.textContent=u.replace(/^https?:\/\/(www\.)?/,'');b.onclick=()=>go(u);$('#tiles').append(b)});
+ const add=document.createElement('button');add.className='tile';add.textContent='＋ Add';add.onclick=()=>{const u=prompt('Shortcut URL');if(u){cfg.tiles.push(norm(u));theme();homeUI()}};$('#tiles').append(add);
+ $('#hs').onkeydown=e=>{if(e.key==='Enter')go(e.target.value)};
+ const tick=()=>{const c=$('#clock');if(c)c.textContent=new Date().toLocaleString([],{weekday:'long',hour:'2-digit',minute:'2-digit',month:'short',day:'numeric'})};tick()}
+setInterval(()=>{const c=$('#clock');if(c)c.textContent=new Date().toLocaleString([],{weekday:'long',hour:'2-digit',minute:'2-digit',month:'short',day:'numeric'})},30000);
+function drawer(kind){const d=$('#drawer');if(d.dataset.k===kind&&d.classList.contains('on')){d.classList.remove('on');return}d.dataset.k=kind;d.classList.add('on');
+ const rowHTML=(items,fn)=>items.map((x,i)=>`<div class="row"><a data-i="${i}">${esc(x.title||x.url)}</a>${fn(x,i)}</div>`).join('')||'<i>Nothing here yet.</i>';
+ if(kind==='bm'){d.innerHTML=`<b>Bookmarks</b><input id="nf" placeholder="New folder name" type="text"><button id="mf">Create folder</button>`+
+   [...new Set(bms.map(b=>b.folder||'Unsorted'))].map(f=>`<b>📁 ${esc(f)}</b>`+rowHTML(bms.filter(b=>(b.folder||'Unsorted')===f),(b)=>`<button data-r="${bms.indexOf(b)}">✎</button><button data-m="${bms.indexOf(b)}">📁</button><button data-x="${bms.indexOf(b)}">✕</button>`)).join('')||'<i>No bookmarks.</i>';
+   d.querySelectorAll('a').forEach(a=>{const b=bms[0];});}
+ if(kind==='bm'){d.querySelectorAll('.row').forEach(r=>{const x=r.querySelector('[data-x]');if(!x)return;const i=+x.dataset.x;r.querySelector('a').onclick=()=>{go(bms[i].url);d.classList.remove('on')};x.onclick=()=>{bms.splice(i,1);save('bm',bms);drawer2('bm')};r.querySelector('[data-r]').onclick=()=>{const n=prompt('Name',bms[i].title);if(n){bms[i].title=n;save('bm',bms);drawer2('bm')}};r.querySelector('[data-m]').onclick=()=>{const n=prompt('Move to folder (name)',bms[i].folder||'');if(n!==null){bms[i].folder=n||undefined;save('bm',bms);drawer2('bm')}}})}
+ if(kind==='hist'){d.innerHTML=`<b>History</b><input id="hq" type="search" placeholder="Search history"><button id="ch">Clear all history</button><div id="hl"></div>`;
+   const render=()=>{const q=$('#hq').value.toLowerCase();const items=hist.map((x,i)=>({...x,i})).filter(x=>(x.title+x.url).toLowerCase().includes(q)).slice(0,200);
+    $('#hl').innerHTML=items.map(x=>`<div class="row"><a data-u="${esc(x.url)}">${esc(x.title||x.url)}</a><button data-x="${x.i}">✕</button></div>`).join('')||'<i>No matches.</i>';
+    $('#hl').querySelectorAll('a').forEach(a=>a.onclick=()=>{go(a.dataset.u);d.classList.remove('on')});
+    $('#hl').querySelectorAll('[data-x]').forEach(b=>b.onclick=()=>{hist.splice(+b.dataset.x,1);save('hist',hist);render()})};
+   $('#hq').oninput=render;$('#ch').onclick=()=>{hist=[];save('hist',hist);render()};render()}
+ if(kind==='dl'){d.innerHTML='<b>Downloads</b>'+(dls.map(x=>`<div class="row"><a>${esc(x.name)}</a>${x.state==='progressing'?`<progress value="${x.received}" max="${x.total||x.received||1}"></progress>`:x.state==='completed'?`<button data-p="${esc(x.path)}">Show</button>`:'<span>⚠ '+esc(x.state)+'</span>'}</div>`).join('')||'<i>No downloads.</i>');
+   d.querySelectorAll('[data-p]').forEach(b=>b.onclick=()=>fufu.reveal(b.dataset.p))}
+ if(kind==='set'){d.innerHTML=`<b>Settings</b><label><input type="checkbox" id="sd" ${cfg.dark?'checked':''}> Dark mode</label><label>Accent <input type="color" id="sa" value="${cfg.ac}"></label><button id="sf">Toggle full screen</button><button id="sc">Clear cache &amp; site data</button><small>Shortcuts: Ctrl+T new tab · Ctrl+W close · Ctrl+Shift+T reopen · Ctrl+L address · Ctrl+R reload · Ctrl+D bookmark · F11 full screen</small>`;
+   $('#sd').onchange=e=>{cfg.dark=e.target.checked;theme()};$('#sa').oninput=e=>{cfg.ac=e.target.value;theme()};
+   let fs=false;$('#sf').onclick=()=>{fs=!fs;fufu.fullscreen(fs)};$('#sc').onclick=async()=>{await fufu.clear();alert('Cache and site data cleared.')}}}
+const drawer2=k=>{$('#drawer').classList.remove('on');drawer(k)};
+$('#mf')&&0;document.addEventListener('click',e=>{if(e.target.id==='mf'){const n=$('#nf').value.trim();if(n&&cur.url){bms.push({url:cur.url,title:cur.title,folder:n});save('bm',bms);drawer2('bm')}}});
+$('#url').onkeydown=e=>{if(e.key==='Enter'){go(e.target.value);e.target.blur()}};$('#url').onfocus=e=>e.target.select();
+$('#bk').onclick=()=>cur.wv.canGoBack()&&cur.wv.goBack();$('#fw').onclick=()=>cur.wv.canGoForward()&&cur.wv.goForward();
+$('#rl').onclick=()=>cur.loading?cur.wv.stop():(cur.url&&cur.wv.reload());$('#hm').onclick=()=>{cur.url='';draw();homeUI()};
+$('#retry').onclick=()=>cur.wv.reload();
+$('#star').onclick=()=>{if(!cur.url)return;const i=bms.findIndex(b=>b.url===cur.url);i>=0?bms.splice(i,1):bms.push({url:cur.url,title:cur.title});save('bm',bms);draw()};
+$('#bm').onclick=()=>drawer('bm');$('#hi').onclick=()=>drawer('hist');$('#dk').onclick=()=>drawer('dl');$('#st').onclick=()=>drawer('set');
+fufu.onOpenTab(u=>newTab(u));
+fufu.onDownload(d=>{const i=dls.findIndex(x=>x.id===d.id);i<0?dls.unshift(d):dls[i]=d;if(d.state==='progressing'&&i<0)drawer2('dl');else if($('#drawer').dataset.k==='dl'&&$('#drawer').classList.contains('on'))drawer2('dl')});
+addEventListener('keydown',e=>{if(!(e.ctrlKey||e.metaKey)&&e.key!=='F11')return;const k=e.key.toLowerCase();
+ const m={t:()=>e.shiftKey?(closed.length&&newTab(closed.pop())):newTab(),w:()=>closeTab(cur.id),l:()=>$('#url').focus(),r:()=>cur.wv.reload(),d:()=>$('#star').click()};
+ if(m[k]){e.preventDefault();m[k]()}});
+theme();newTab();homeUI();
+</script></body></html>
